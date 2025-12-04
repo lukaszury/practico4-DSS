@@ -1,24 +1,11 @@
-/**
- * Security Test: Template Injection Mitigation
- * 
- * This test validates that the Template Injection vulnerability has been mitigated
- * in the createUser function by ensuring malicious payloads are rejected.
- * 
- * Vulnerability Description:
- * The vulnerable version (main branch) uses direct string interpolation in templates:
- *   const template = `Hello ${user.first_name} ${user.last_name}`;
- * This allows template injection attacks through malicious user input.
- * 
- * Mitigation:
- * The secure version (practico-2) uses:
- * 1. Input validation with regex patterns
- * 2. Safe template rendering using EJS with explicit data binding
- * 3. Fixed template strings with parameterized substitution
- * 
- * Test Strategy:
- * - Test that malicious template payloads are rejected (mitigation working)
- * - Verify safe content is properly rendered
- */
+/*
+  Test de mitigación de template injection
+
+  Este test se hace cargo de valida que la vulnerabilida de template injection haya sido mitigada en la función createUser. La versión vulnerable de main, utiliza una
+  interpolación de strings en el template, de esta forma una entrada maliciosa por parte del usuario podría generar un template injection.
+
+  El test revisa que los payloads maliciosos sean rechazados y también que aquellas entradas que sean seguras sigan funcionando y sean manejadas correctamente.
+*/
 
 import AuthService from '../../src/services/authService';
 import db from '../../src/db';
@@ -37,16 +24,15 @@ describe('Security: Template Injection Mitigation', () => {
     process.env.FRONTEND_URL = 'http://localhost:3000';
   });
 
-  /**
-   * Test Case 1: Attempt to inject template code via first_name
-   * Payload: <%= 7*7 %> should be rejected or sanitized
-   */
+  /*  Caso 1: Intentar hacer un template injection mediante first_name.
+        Payload: <%= 7*7 %>
+  */
   it('should reject malicious first_name payload attempting template injection', async () => {
     const maliciousUser: User = {
       id: 'user-123',
       email: 'test@example.com',
       password: 'password123',
-      first_name: '<%= 7*7 %>', // Attempted template injection
+      first_name: '<%= 7*7 %>',
       last_name: 'Last',
       username: 'username'
     };
@@ -61,21 +47,19 @@ describe('Security: Template Injection Mitigation', () => {
     const mockedDbInstance = db as jest.MockedFunction<typeof db>;
     mockedDbInstance.mockReturnValue(selectChain as any);
 
-    // Should throw error due to invalid name validation
     await expect(AuthService.createUser(maliciousUser)).rejects.toThrow('Invalid name');
   });
 
-  /**
-   * Test Case 2: Attempt to inject template code via last_name
-   * Payload: <%= global.process.exit() %> should be rejected
-   */
+  /*  Caso 2: Intentar hacer un template injection mediante last_name.
+        Payload: <%= global.process.exit() %>
+  */
   it('should reject malicious last_name payload attempting template injection', async () => {
     const maliciousUser: User = {
       id: 'user-123',
       email: 'test@example.com',
       password: 'password123',
       first_name: 'First',
-      last_name: '<%= global.process.exit() %>', // Attempted code execution
+      last_name: '<%= global.process.exit() %>',
       username: 'username'
     };
 
@@ -89,20 +73,18 @@ describe('Security: Template Injection Mitigation', () => {
     const mockedDbInstance = db as jest.MockedFunction<typeof db>;
     mockedDbInstance.mockReturnValue(selectChain as any);
 
-    // Should throw error due to invalid name validation
     await expect(AuthService.createUser(maliciousUser)).rejects.toThrow('Invalid name');
   });
 
-  /**
-   * Test Case 3: Attempt to inject template code via both fields
-   * Payload: <%= %> should be rejected
-   */
+  /*  Caso 3: Intentar hacer un template injection mediante los dos campos (first_name y last_name).
+        Payload: <%= %>
+  */
   it('should reject EJS tags in name fields', async () => {
     const maliciousUser: User = {
       id: 'user-123',
       email: 'test@example.com',
       password: 'password123',
-      first_name: '<%=', // Incomplete EJS tag
+      first_name: '<%=',
       last_name: '%>',
       username: 'username'
     };
@@ -117,13 +99,11 @@ describe('Security: Template Injection Mitigation', () => {
     const mockedDbInstance = db as jest.MockedFunction<typeof db>;
     mockedDbInstance.mockReturnValue(selectChain as any);
 
-    // Should throw error due to invalid name validation
     await expect(AuthService.createUser(maliciousUser)).rejects.toThrow('Invalid name');
   });
 
-  /**
-   * Test Case 4: Attempt to inject via JavaScript code in names
-   */
+
+  // Caso 4: Intentar inyectar codigo JS en los campos.
   it('should reject JavaScript code in name fields', async () => {
     const maliciousUser: User = {
       id: 'user-123',
@@ -144,13 +124,10 @@ describe('Security: Template Injection Mitigation', () => {
     const mockedDbInstance = db as jest.MockedFunction<typeof db>;
     mockedDbInstance.mockReturnValue(selectChain as any);
 
-    // Should throw error due to invalid name validation
     await expect(AuthService.createUser(maliciousUser)).rejects.toThrow('Invalid name');
   });
 
-  /**
-   * Test Case 5: Verify safe input is accepted and properly handled
-   */
+  // Caso 5: Verificar que una entrada segura/sanitizada funcione
   it('should accept and safely render valid name fields', async () => {
     const safeUser: User = {
       id: 'user-123',
@@ -189,7 +166,6 @@ describe('Security: Template Injection Mitigation', () => {
     const mockSendMail = jest.fn().mockResolvedValue({ success: true });
     nodemailer.createTransport = jest.fn().mockReturnValue({ sendMail: mockSendMail });
 
-    // Should not throw
     await expect(AuthService.createUser(safeUser)).resolves.not.toThrow();
   });
 });

@@ -1,26 +1,13 @@
 #!/usr/bin/env python3
 """
-Regression Test: SQL Injection Mitigation
+Regression Test: Mitigación de inyección SQL
 
-This test validates that the SQL injection vulnerability in the invoice listing
-functionality has been properly mitigated.
+Este test basicamente se encarga de validar que la inyección SQL en el invoice haya sido mitigada. En main se usa concatenación de strings en las consultas SQL lo cual
+deja expuesto a que se haga inyección SQL a través del status u operadores.
 
-Vulnerability Description:
-The vulnerable version (main branch) uses string concatenation in SQL queries:
-  q.andWhereRaw(" status " + operator + " '" + status + "'")
-This allows SQL injection through malicious status/operator parameters.
-
-Mitigation:
-The secure version (practico-2) implements:
-1. Operator whitelisting with allowed operators
-2. Input validation for status parameter
-3. Parameterized queries using knex.js instead of raw string concatenation
-
-Test Strategy:
-- Attempt various SQL injection payloads that would work on vulnerable version
-- Verify that all malicious payloads are rejected with appropriate error messages
-- Confirm that legitimate queries still work correctly
-- Ensure no information leakage occurs
+La idea es mitigarlo con una lista de operadores permitidos, hacer validación de lo que se ingrese como status y parametrizar las consultas usando knex en vez de estar
+concatenando el string de forma directa. El test intenta cargar varios payloads con inyección SQL que en la versión vulnerable deberían lograr penetrar. Verifica luego
+que todos sean rechazados y que las consultas legitimas sigan funcionando.
 """
 
 import requests
@@ -36,11 +23,9 @@ PASSWORD = "password"
 
 
 class TestSQLInjectionRegression:
-    """Test class for SQL injection regression testing"""
 
     @pytest.fixture(scope="class")
     def auth_token(self):
-        """Fixture to get authentication token for tests"""
         url = f"{BASE_URL}/auth/login"
         data = {"username": USERNAME, "password": PASSWORD}
 
@@ -54,8 +39,6 @@ class TestSQLInjectionRegression:
             pytest.fail(f"Authentication failed: {e}")
 
     def test_basic_sql_injection_payloads_rejected(self, auth_token):
-        """Test that basic SQL injection payloads are properly rejected"""
-
         malicious_payloads = [
             ("paid' OR '1'='1", "=", "Bypass authentication"),
             ("paid' UNION SELECT 1,2,3,4,5--", "=", "Basic UNION injection"),
@@ -80,70 +63,63 @@ class TestSQLInjectionRegression:
 
             try:
                 response = requests.get(url, headers=headers, timeout=10)
+                assert response.status_code != 200, f"Inyeccion SQL exitosa {description}: {response.status_code}"
 
-                # Check that injection is blocked
-                assert response.status_code != 200, f"SQL injection succeeded for {description}: {response.status_code}"
-
-                # Should get validation error or 500, but not successful execution
+                #A partir de aca deberia ocurrir un error de validación o directamente dar 500
                 if response.status_code == 400:
-                    # Good - validation error
+                    #Error de validacion
                     error_data = response.json() if response.headers.get('content-type') == 'application/json' else {}
-                    print(f"✓ Properly rejected with validation error: {error_data}")
+                    print(f"Se rechazo correctamente con el error de validacion: {error_data}")
                 elif response.status_code == 500:
-                    # Acceptable - server error due to invalid SQL
+                    #Error por parte del servidor (SQL invalido)
                     error_text = response.text[:200]
-                    assert "syntax error" not in error_text.lower(), f"SQL syntax error leaked: {error_text}"
-                    print(f"✓ Properly rejected with server error (mitigated)")
+                    assert "syntax error" not in error_text.lower(), f"Error de sintaxis SQL: {error_text}"
+                    print(f"Se rechazo correctamente con error del servidor")
                 else:
-                    pytest.fail(f"Unexpected response for {description}: {response.status_code} - {response.text}")
+                    pytest.fail(f"Respuesta no esperada para {description}: {response.status_code} - {response.text}")
 
             except requests.exceptions.RequestException as e:
-                # Connection errors are acceptable as long as injection doesn't succeed
-                print(f"✓ Request blocked (connection error): {e}")
+                print(f"Petición bloqueada por un error de conexion: {e}")
 
+    #Esta función se hace cargo de testear que solo los operadores permitidos sean aceptados
     def test_operator_validation(self, auth_token):
-        """Test that only allowed operators are accepted"""
-
         invalid_operators = [
-            "LIKE",  # Valid but without proper validation
-            "NOT LIKE",  # Valid but without proper validation
-            "INVALID_OP",  # Invalid operator
-            "OR",  # Dangerous operator
-            "AND",  # Dangerous operator
-            ";",  # Dangerous character
-            "--",  # Comment character
-            "/*",  # Block comment
-            "UNION",  # Dangerous keyword
-            "DROP",  # Dangerous keyword
+            "LIKE",
+            "NOT LIKE",
+            "INVALID_OP", 
+            "OR",
+            "AND",
+            ";",
+            "--",
+            "/*",
+            "UNION",
+            "DROP",
         ]
 
         headers = {"Authorization": f"Bearer {auth_token}"}
 
         for operator in invalid_operators:
-            print(f"\nTesting invalid operator: {operator}")
+            print(f"\nProbando operador invalido: {operator}")
             encoded_operator = urllib.parse.quote(operator)
             url = f"{BASE_URL}/invoices?status=paid&operator={encoded_operator}"
 
             try:
                 response = requests.get(url, headers=headers, timeout=10)
-
-                # Should not succeed
-                assert response.status_code != 200, f"Invalid operator {operator} was accepted: {response.status_code}"
+                assert response.status_code != 200, f"Operador invalido {operator} fue aceptado: {response.status_code}"
 
                 if response.status_code == 400:
-                    print(f"✓ Operator {operator} properly rejected")
+                    print(f"Operador {operator} rechazado")
                 elif response.status_code == 500:
                     error_text = response.text[:200]
                     # Make sure it's not a successful injection
-                    assert "UNION" not in error_text and "SELECT" not in error_text, f"Possible injection with operator {operator}"
-                    print(f"✓ Operator {operator} blocked with server error")
+                    assert "UNION" not in error_text and "SELECT" not in error_text, f"Posible inyeccion con operador {operator}"
+                    print(f"Operador {operator} bloqueado con error del server")
 
             except requests.exceptions.RequestException as e:
-                print(f"✓ Operator {operator} blocked (connection error): {e}")
+                print(f"Operador {operator} bloqueado por error de conexion: {e}")
 
+    #Funcion que prueba que caracteres que podrian ser maliciosos y esten en el status sean rechazados
     def test_status_parameter_validation(self, auth_token):
-        """Test that malicious characters in status parameter are rejected"""
-
         malicious_statuses = [
             "paid' OR '1'='1",
             "paid'; DROP TABLE invoices; --",
@@ -152,36 +128,35 @@ class TestSQLInjectionRegression:
             "paid'--",
             "paid';--",
             "paid' AND 1=1 UNION SELECT password FROM users--",
-            "paid<script>alert('xss')</script>",  # XSS attempt
-            "paid../../../etc/passwd",  # Path traversal
-            "paid' || (SELECT password FROM users LIMIT 1)--",  # Subquery injection
+            "paid<script>alert('xss')</script>",
+            "paid../../../etc/passwd",
+            "paid' || (SELECT password FROM users LIMIT 1)--",
         ]
 
         headers = {"Authorization": f"Bearer {auth_token}"}
 
         for status in malicious_statuses:
-            print(f"\nTesting malicious status: {status[:50]}...")
+            print(f"\nProbando status malicioso: {status[:50]}...")
             encoded_status = urllib.parse.quote(status)
             url = f"{BASE_URL}/invoices?status={encoded_status}&operator=="
 
             try:
                 response = requests.get(url, headers=headers, timeout=10)
 
-                assert response.status_code != 200, f"Malicious status parameter accepted: {status[:50]}"
+                assert response.status_code != 200, f"Status malicioso aceptado: {status[:50]}"
 
                 if response.status_code == 400:
-                    print(f"✓ Malicious status properly rejected: {status[:30]}...")
+                    print(f"Status malicioso rechazado: {status[:30]}...")
                 elif response.status_code == 500:
                     error_text = response.text[:200]
-                    assert not any(keyword in error_text.upper() for keyword in ["UNION", "SELECT", "DROP"]), f"Possible injection success with status: {status[:30]}"
-                    print(f"✓ Malicious status blocked: {status[:30]}...")
+                    assert not any(keyword in error_text.upper() for keyword in ["UNION", "SELECT", "DROP"]), f"Posible inyección exitosa con status: {status[:30]}"
+                    print(f"Status malicioso bloqueado: {status[:30]}...")
 
             except requests.exceptions.RequestException as e:
-                print(f"✓ Malicious status blocked (connection error): {status[:30]}...")
+                print(f"Status malicioso bloqueado por error de conexion: {status[:30]}...")
 
+    #Testear que aquellas consultas que sí son legítimas sigan funcionando
     def test_legitimate_queries_still_work(self, auth_token):
-        """Test that legitimate queries continue to work after mitigation"""
-
         legitimate_queries = [
             ("paid", "=", "Exact status match"),
             ("unpaid", "=", "Exact status match"),
@@ -193,7 +168,7 @@ class TestSQLInjectionRegression:
         headers = {"Authorization": f"Bearer {auth_token}"}
 
         for status, operator, description in legitimate_queries:
-            print(f"\nTesting legitimate query: {description} ({status} {operator})")
+            print(f"\nProbando consulta legitima: {description} ({status} {operator})")
             encoded_status = urllib.parse.quote(status)
             encoded_operator = urllib.parse.quote(operator)
 
@@ -201,26 +176,21 @@ class TestSQLInjectionRegression:
 
             try:
                 response = requests.get(url, headers=headers, timeout=10)
-
-                # For string status with > operator, should be rejected
                 if operator == ">":
-                    assert response.status_code in [400, 500], f"Invalid operator should be rejected: {operator}"
-                    print(f"✓ Invalid operator properly rejected: {operator}")
+                    assert response.status_code in [400, 500], f"Operador invalido, deberia ser rechazado: {operator}"
+                    print(f"Operador invalido rechazado: {operator}")
                 else:
-                    # Valid queries should work (may return 200 or 404 if no data)
-                    assert response.status_code in [200, 404], f"Valid query failed: {response.status_code} - {response.text[:200]}"
-                    print(f"✓ Legitimate query works: {status} {operator}")
+                    assert response.status_code in [200, 404], f"Fallo en una consulta legitima: {response.status_code} - {response.text[:200]}"
+                    print(f"Consulta legitima funcionando: {status} {operator}")
 
             except requests.exceptions.RequestException as e:
-                # Connection errors for valid queries are unexpected
                 if operator != ">":
-                    pytest.fail(f"Valid query failed with connection error: {e}")
+                    pytest.fail(f"Consulta valida fallida por error de conexión: {e}")
                 else:
-                    print(f"✓ Invalid operator properly blocked: {operator}")
+                    print(f"Operador invalido bloqueado: {operator}")
 
+    #Funcion que testea que los mensajes de error no estén mostrando o exponiendo datos sensibles
     def test_no_information_leakage(self, auth_token):
-        """Test that error messages don't leak sensitive information"""
-
         malicious_payloads = [
             "paid' UNION SELECT table_name FROM information_schema.tables--",
             "paid' UNION SELECT column_name FROM information_schema.columns--",
@@ -242,12 +212,12 @@ class TestSQLInjectionRegression:
                     # Ensure no database information is leaked
                     assert not any(keyword in error_text for keyword in [
                         "table", "column", "database", "schema", "mysql", "postgresql"
-                    ]), f"Information leakage detected in error: {response.text[:300]}"
+                    ]), f"Información sensible detectada en error: {response.text[:300]}"
 
-                    print(f"✓ No information leakage for payload: {payload[:30]}...")
+                    print(f"Sin información sensible en el payload: {payload[:30]}...")
 
             except requests.exceptions.RequestException:
-                print(f"✓ Request blocked for payload: {payload[:30]}...")
+                print(f"Peticion bloqueada para el payload: {payload[:30]}...")
 
 
 if __name__ == "__main__":
